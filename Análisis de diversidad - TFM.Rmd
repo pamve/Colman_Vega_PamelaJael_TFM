@@ -1,0 +1,2632 @@
+---
+title: "Análisis de diversidad - TFM"
+author: "PJCV"
+date: "2023-05-30"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      toc_collapsed: yes
+    theme: cosmo
+    highlight: textmate
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+  word_document:
+    toc: yes
+    toc_depth: '5'
+---
+
+# Análisis de diversidad 
+
+## Libraries
+
+```{r class.source = 'fold-hide', include=FALSE}
+library(phyloseq)
+library(vegan)
+library(devtools)
+library(qiime2R)
+library(conflicted)
+library(dplyr)
+library(cowplot)
+library(phyloseqGraphTest)
+library(Biobase)
+library(readxl)
+library(openxlsx)
+library(phangorn)
+library(agricolae)
+library(cluster)
+library(readr)
+library(biomformat)
+library(ggplot2)
+library(stats)
+library(writexl)
+library(labdsv)
+library(SummarizedExperiment)
+```
+
+
+## Carga de los datos de QIIME 2
+
+Cargamos la tabla que contiene sólo los datos de bacterias obtenida de QIIME 2 mediante la función *read_qza* que extrae los datos incrustados en el artefacto (qza)y metadatos de los objetos en ASVs (1).
+
+```{r class.source = 'fold-hide', echo=TRUE}
+
+ASVs <- read_qza("BIOMIC_16SB_table_Sg-filt-A-E-U-mito-chloro.qza") #cargamos la tabla que contiene sólo bacterias
+names(ASVs)
+ASVs$data[1:5,1:45] #mostramos las primeras 5 muestras y los primeros 5 taxones
+
+```
+
+### Evaluación de los componentes de los ASVs
+
+
+```{r evaluación componentes}
+ASVs$uuid
+ASVs$type
+ASVs$contents
+```
+
+### Carga de los metadatos
+
+Se carga el archivo de matadatos con la función *read_q2metadata* de qiime2R en el que la segunda línea (#q2:types) se definen los tipos de variables de los datos introducidos (categórica/numérica) (1).
+
+```{r metadatos}
+metadata <- read_q2metadata("metadata4.txt") # los datos de citometría se han dividido por 10^8.
+
+head(metadata) # mostrar las líneas superiores del metadato
+```
+
+### Carga de los datos de la afiliación taxonómica
+
+Con la misma función utilizada anteriormente, se introduce la tabla de la afiliación taxonómica obtenida de QIIME 2 (1).
+
+```{r taxonomía}
+taxonomy <- read_qza("BIOMIC_16SB_Sg-filt_taxonomy.qza")
+head(taxonomy$data)
+```
+
+### Creación del objeto phyloseq
+
+*qiime2R* también ofrece la función *qza_to_phyloseq* que permite la construcción de un objeto _phyloseq_ a partir de múltiples artefactos de QIIME 2 (1).
+
+```{r objeto phyloseq, message=FALSE}
+physeq <- qza_to_phyloseq(features="C:/Users/pame_/Documents/Diversidad_TFM/BIOMIC_16SB_table_Sg-filt-A-E-U-mito-chloro.qza", tree="C:/Users/pame_/Documents/Diversidad_TFM/BIOMIC_16SB_rooted-tree.qza", taxonomy="C:/Users/pame_/Documents/Diversidad_TFM/BIOMIC_16SB_Sg-filt_taxonomy.qza", metadata = "C:/Users/pame_/Documents/Diversidad_TFM/metadata4.txt")
+
+physeq
+```
+
+## Exclusión de las muestras de los tiempos iniciales
+
+La función *prune_samples* de *phyloseq* permite filtrar las muestras no deseadas mediante la definición de las que se desea conservar. Por ello, en esta nueva lista no aparecen las muestras SH y T0C1-T0C5 (2) <https://github.com/joey711/phyloseq/tree/master>.
+
+
+```{r creación nuevo objeto}
+ps_new <- prune_samples(c("T1C1C", "T1C2C", "T1C3C", "T1C4C", "T1C5C", "T1C1T", "T1C2T","T1C3T","T1C4T","T1C5T","T2C1C","T2C2C","T2C3C","T2C4C","T2C5C","T2C1T","T2C2T","T2C3T","T2C4T","T2C5T","T3C1C","T3C2C","T3C3C","T3C4C","T3C5C","T3C1T","T3C2T","T3C3T","T3C4T","T3C5T","T4C1C","T4C2C","T4C3C","T4C4C","T4C5C","T4C1T","T4C2T","T4C4T","T4C5T"), physeq)
+ps_new
+```
+
+```{r}
+otu<-t(as(otu_table(ps_new),"matrix")) # 't' to transform if taxa_are_rows=FALSE
+#if taxa_are_rows=TRUE
+#otu<-as(otu_table(GlobalPatterns),"matrix"))
+otu_biom<-make_biom(data=otu)
+write_biom(otu_biom,"otu_biom.biom")
+```
+
+
+### Evaluación de la nueva tabla ASVs (ps_new)
+
+Las siguientes funciones provienen del paquete *phyloseq* (2):
+La función *taxa_names* extrae los nombres de las especies/taxones. 
+La función *ntaxa* extrae el número de especies/taxones.
+La función *taxa_sums* extrae la suma suma de las especies/taxones.
+La función *otu_table* extrae la abundancia de las ASVs. 
+
+```{r nueva tabla ASVs}
+ntaxa(ps_new) #obtención del número de taxones
+head(taxa_names(ps_new)) #obtención de los nombres de los taxones
+head(taxa_sums(ps_new)) # función equivalente a rowSums o colSums, pero donde la orientación de otu_table se maneja automáticamente.
+
+asv_tab <- data.frame(otu_table(ps_new)[1:5, 1:5]) #creación de una tabla resumen de asv que nos muestra la abundancia de las ASVs de las primeras 5 filas y las primeras 5 columnas. 
+```
+
+### Evaluación de la taxonomía
+
+Las siguientes funciones provienen del paquete *phyloseq* (2):
+La función *rank_names* deterima los rangos taxonómicos del objeto _phyloseq_.
+La función *tax_table* es un método que construye y hace accesible la tabla con los nombres taxonómicos asignados. Se encuentran organizados en rangos taxonómicos correspondientes a las columnas de la tabla.
+
+
+```{r taxonomia}
+rank_names(ps_new) 
+head(tax_table(ps_new))
+head(tax_table(ps_new)[, 2])
+table(tax_table(ps_new)[, 2])
+tax_tab <- data.frame(tax_table(ps_new)[50:55, ])
+```
+
+### Transformación y rarefacción de las muestras 
+
+Las siguientes funciones provienen del paquete *phyloseq* (2):
+La función *transform_sample_counts* transforma los recuentos de muestras a una matriz de abundancia de taxones según una función proporcionada.
+La función *rarefy_even_depth* permite rehacer la tabla de AVSs para que todas las muestras tengan el mismo número de muestra de partida.
+
+```{r abundancia relativa, message=FALSE}
+ps_relabund <- transform_sample_counts(ps_new, function(x) x / sum(x))
+otu_table(ps_relabund)[1:5, 1:5]
+```
+
+En el argumento *sample.size* se establece que el número de lecturas que se debe establecer en todas las muestras es de 19400.
+
+
+```{r rarefy, message=FALSE}
+set.seed(123)
+ps_rare <- rarefy_even_depth(ps_new, sample.size = 19400, rngseed = 123, replace = FALSE)
+sample_sums(ps_rare)
+```
+
+## Creación de tablas divididas en los distintos niveles taxonómicos
+
+Para la divición de las tablas en los distintos niveles taxonómicos se utiliza la función *tax_glom*, cuyo método fusiona las especies del mismo rango taxonómico en una nueva tabla (2). 
+
+```{r glom-phylum, message=FALSE}
+set.seed(123)
+ps_phylum <- tax_glom(ps_rare, "Phylum")
+otu_table(ps_phylum)[1:5, c(1:3, 5, 7)]
+```
+
+```{r glom-class, message=FALSE}
+ps_class <- tax_glom(ps_rare, "Class")
+otu_table(ps_class)[1:5, c(1:3, 5, 7)]
+```
+
+```{r glom-order, message=FALSE}
+ps_ord <- tax_glom(ps_rare, "Order")
+otu_table(ps_ord)[1:5, c(1:3, 5, 7)]
+```
+
+```{r glom-family, message=FALSE}
+ps_fam <- tax_glom(ps_rare, "Family")
+otu_table(ps_fam)[1:5, c(1:3, 5, 7)]
+```
+
+```{r glom-genus, message=FALSE}
+ps_genus <- tax_glom(ps_rare, "Genus")
+otu_table(ps_genus)[1:5, c(1:3, 5, 7)]
+```
+
+## Análisis de α-diversidad
+
+La diversidad alfa expresa la riqueza de especies presente en una muestra. Por tanto, se utilizan diversos índices que nos generarán esta información, que posteriormente serán analizadas estadísticamente para evaluar la riqueza de especies en cada muestra. 
+
+La función *estimate_richness* de *phyloseq* (2), estima la riqueza de especies en cada muestra y que cómo se distribuyen (uniformidad). Los resultados que se obtienen son los correspondientes a los índices de Shannon, ACE, Chao1, Simpson y Fisher (3-7). Finalmente, estos resultados se guardar en un archivo de excel.
+
+```{r tablaexcelindices}
+
+#Byphylum
+indices_alfa_p <- estimate_richness(ps_phylum)
+View(indices_alfa_p)
+write.csv2(indices_alfa_p, file="Indices_alfa_p.csv", row.names = T)
+
+#Byclass
+indices_alfa_c <- estimate_richness(ps_class)
+View(indices_alfa_c)
+write.csv2(indices_alfa_c, file="Indices_alfa_c.csv", row.names = T)
+
+#Byorder
+indices_alfa_or <- estimate_richness(ps_ord)
+View(indices_alfa_or)
+write.csv2(indices_alfa_or, file="Indices_alfa_or.csv", row.names = T)
+
+#Byfamily
+indices_alfa_f <- estimate_richness(ps_fam)
+View(indices_alfa_f)
+write.csv2(indices_alfa_f, file="Indices_alfa_f.csv", row.names = T)
+
+#Bygenus
+indices_alfa_g <- estimate_richness(ps_genus)
+View(indices_alfa_g)
+write.csv2(indices_alfa_g, file="Indices_alfa_g.csv", row.names = T)
+
+#Byspecies
+indices_alfa <- estimate_richness(ps_rare)
+View(indices_alfa)
+write.csv2(indices_alfa, file="Indices_alfa_general.csv", row.names = T)
+
+```
+
+
+### Representación gráfica del análisis de la α-diversidad
+
+#### Por filo
+
+```{r PHYLUM}
+IAPHY <- read.csv2("Indices_alfa_p.csv", header = TRUE, sep = ";", dec = "," )
+x <- read_excel("x.xlsx")
+
+IAPHY <- IAPHY %>%
+  mutate(`Cond-T` = x$`Cond-T`,
+         Time = x$Time,
+         cond = x$cond)
+```
+```{r BOXPLOT-PHYLUM}
+# Shannon boxplot 
+shannon_box <- ggplot(as.data.frame(IAPHY),
+  aes(x = cond, 
+      y = Shannon,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Chao1 boxplot 
+Chao1_box <- ggplot(as.data.frame(IAPHY),
+  aes(x = cond, 
+      y = Chao1,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Observed boxplot 
+Observed_box <- ggplot(as.data.frame(IAPHY),
+  aes(x = cond, 
+      y = Observed,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# ACE boxplot 
+ACE_box <- ggplot(as.data.frame(IAPHY),
+  aes(x = cond, 
+      y = ACE,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Simpson boxplot 
+Simpson_box <- ggplot(as.data.frame(IAPHY),
+  aes(x = cond, 
+      y = Simpson,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Fisher boxplot 
+Fisher_box <- ggplot(as.data.frame(IAPHY),
+  aes(x = cond, 
+      y = Fisher,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+grid_plots <- gridExtra::grid.arrange(shannon_box, Chao1_box, Observed_box, nrow = 3)
+ggsave("grid_plot1.jpg", plot = grid_plots, device = "jpeg")
+
+grid_plots <- gridExtra::grid.arrange(ACE_box, Simpson_box, Fisher_box, nrow = 3)
+ggsave("grid_plot2.jpg", plot = grid_plots, device = "jpeg")
+```
+
+
+
+
+#### Por clase
+
+```{r CLASS}
+IACLASS <- read.csv2("Indices_alfa_c.csv", header = TRUE, sep = ";", dec = "," )
+x <- read_excel("x.xlsx")
+
+IACLASS <- IACLASS %>%
+  mutate(`Cond-T` = x$`Cond-T`,
+         Time = x$Time,
+         cond = x$cond)
+```
+```{r BOXPLOT-CLASS}
+# Shannon boxplot 
+shannon_box <- ggplot(as.data.frame(IACLASS),
+  aes(x = cond, 
+      y = Shannon,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+# Chao1 boxplot 
+Chao1_box <- ggplot(as.data.frame(IACLASS),
+  aes(x = cond, 
+      y = Chao1,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Observed boxplot 
+Observed_box <- ggplot(as.data.frame(IACLASS),
+  aes(x = cond, 
+      y = Observed,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# ACE boxplot 
+ACE_box <- ggplot(as.data.frame(IACLASS),
+  aes(x = cond, 
+      y = ACE,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Simpson boxplot 
+Simpson_box <- ggplot(as.data.frame(IACLASS),
+  aes(x = cond, 
+      y = Simpson,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Fisher boxplot 
+Fisher_box <- ggplot(as.data.frame(IACLASS),
+  aes(x = cond, 
+      y = Fisher,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+grid_plots <- gridExtra::grid.arrange(shannon_box, Chao1_box, Observed_box, nrow = 3)
+ggsave("grid_plot3.jpg", plot = grid_plots, device = "jpeg")
+
+grid_plots <- gridExtra::grid.arrange(ACE_box, Simpson_box, Fisher_box, nrow = 3)
+ggsave("grid_plot4.jpg", plot = grid_plots, device = "jpeg")
+```
+
+#### Por orden
+
+```{r ORDER}
+IAORDER <- read.csv2("Indices_alfa_or.csv", header = TRUE, sep = ";", dec = "," )
+x <- read_excel("x.xlsx")
+
+IAORDER <- IAORDER %>%
+  mutate(`Cond-T` = x$`Cond-T`,
+         Time = x$Time,
+         cond = x$cond)
+```
+```{r BOXPLOT-ORDER}
+# Shannon boxplot 
+shannon_box <- ggplot(as.data.frame(IAORDER),
+  aes(x = cond, 
+      y = Shannon,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Chao1 boxplot 
+Chao1_box <- ggplot(as.data.frame(IAORDER),
+  aes(x = cond, 
+      y = Chao1,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Observed boxplot 
+Observed_box <- ggplot(as.data.frame(IAORDER),
+  aes(x = cond, 
+      y = Observed,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# ACE boxplot 
+ACE_box <- ggplot(as.data.frame(IAORDER),
+  aes(x = cond, 
+      y = ACE,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Simpson boxplot 
+Simpson_box <- ggplot(as.data.frame(IAORDER),
+  aes(x = cond, 
+      y = Simpson,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Fisher boxplot 
+Fisher_box <- ggplot(as.data.frame(IAORDER),
+  aes(x = cond, 
+      y = Fisher,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+grid_plots <- gridExtra::grid.arrange(shannon_box, Chao1_box, Observed_box, nrow = 3)
+ggsave("grid_plot5.jpg", plot = grid_plots, device = "jpeg")
+
+grid_plots <- gridExtra::grid.arrange(ACE_box, Simpson_box, Fisher_box, nrow = 3)
+ggsave("grid_plot6.jpg", plot = grid_plots, device = "jpeg")
+```
+
+#### Por familia
+
+```{r FAMILY}
+IAFAM <- read.csv2("Indices_alfa_f.csv", header = TRUE, sep = ";", dec = "," )
+x <- read_excel("x.xlsx")
+
+IAFAM <- IAFAM %>%
+  mutate(`Cond-T` = x$`Cond-T`,
+         Time = x$Time,
+         cond = x$cond)
+```
+```{r BOXPLOT-FAMILY}
+# Shannon boxplot 
+shannon_box <- ggplot(as.data.frame(IAFAM),
+  aes(x = cond, 
+      y = Shannon,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Chao1 boxplot 
+Chao1_box <- ggplot(as.data.frame(IAFAM),
+  aes(x = cond, 
+      y = Chao1,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Observed boxplot 
+Observed_box <- ggplot(as.data.frame(IAFAM),
+  aes(x = cond, 
+      y = Observed,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# ACE boxplot 
+ACE_box <- ggplot(as.data.frame(IAFAM),
+  aes(x = cond, 
+      y = ACE,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Simpson boxplot 
+Simpson_box <- ggplot(as.data.frame(IAFAM),
+  aes(x = cond, 
+      y = Simpson,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Fisher boxplot 
+Fisher_box <- ggplot(as.data.frame(IAFAM),
+  aes(x = cond, 
+      y = Fisher,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+gridExtra::grid.arrange(shannon_box, Chao1_box, Observed_box, nrow = 3)
+grid_plots <- ggsave("grid_plot7.jpg", plot = grid_plots, device = "jpeg")
+
+grid_plots <- gridExtra::grid.arrange(ACE_box, Simpson_box, Fisher_box, nrow = 3)
+ggsave("grid_plot8.jpg", plot = grid_plots, device = "jpeg")
+```
+
+#### Por género
+
+```{r GENUS}
+IAGENUS <- read.csv2("Indices_alfa_g.csv", header = TRUE, sep = ";", dec = "," )
+x <- read_excel("x.xlsx")
+
+IAGENUS <- IAGENUS %>%
+  mutate(`Cond-T` = x$`Cond-T`,
+         Time = x$Time,
+         cond = x$cond)
+```
+```{r BOXPLOT-GENUS}
+#  Shannon boxplot 
+shannon_box <- ggplot(as.data.frame(IAGENUS),
+  aes(x = cond, 
+      y = Shannon,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Chao1 boxplot 
+Chao1_box <- ggplot(as.data.frame(IAGENUS),
+  aes(x = cond, 
+      y = Chao1,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Observed boxplot 
+Observed_box <- ggplot(as.data.frame(IAGENUS),
+  aes(x = cond, 
+      y = Observed,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# ACE boxplot 
+ACE_box <- ggplot(as.data.frame(IAGENUS),
+  aes(x = cond, 
+      y = ACE,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Simpson boxplot 
+Simpson_box <- ggplot(as.data.frame(IAGENUS),
+  aes(x = cond, 
+      y = Simpson,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Fisher boxplot 
+Fisher_box <- ggplot(as.data.frame(IAGENUS),
+  aes(x = cond, 
+      y = Fisher,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+grid_plots <- gridExtra::grid.arrange(shannon_box, Chao1_box, Observed_box, nrow = 3)
+ggsave("grid_plot9.jpg", plot = grid_plots, device = "jpeg")
+
+grid_plots <- gridExtra::grid.arrange(ACE_box, Simpson_box, Fisher_box, nrow = 3)
+ggsave("grid_plot10.jpg", plot = grid_plots, device = "jpeg")
+```
+
+#### Por especie
+
+```{r especie}
+IAS <- read.csv2("Indices_alfa_general.csv", header = TRUE, sep = ";", dec = "," )
+x <- read_excel("x.xlsx")
+
+IAS <- IAS %>%
+  mutate(`Cond-T` = x$`Cond-T`,
+         Time = x$Time,
+         cond = x$cond)
+```
+```{r BOXPLOT-ESPECIA}
+# Shannon boxplot 
+shannon_box <- ggplot(as.data.frame(IAS),
+  aes(x = cond, 
+      y = Shannon,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Chao1 boxplot 
+Chao1_box <- ggplot(as.data.frame(IAS),
+  aes(x = cond, 
+      y = Chao1,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# Observed boxplot 
+Observed_box <- ggplot(as.data.frame(IAS),
+  aes(x = cond, 
+      y = Observed,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+# ACE boxplot 
+ACE_box <- ggplot(as.data.frame(IAS),
+  aes(x = cond, 
+      y = ACE,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Simpson boxplot 
+Simpson_box <- ggplot(as.data.frame(IAS),
+  aes(x = cond, 
+      y = Simpson,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12))
+
+# Fisher boxplot 
+Fisher_box <- ggplot(as.data.frame(IAS),
+  aes(x = cond, 
+      y = Fisher,
+      fill = Time)) + 
+  geom_boxplot() +
+  theme(title = element_text(size = 12)) 
+
+grid_plots <- gridExtra::grid.arrange(shannon_box, Chao1_box, Observed_box, nrow = 3)
+ggsave("grid_plot11.jpg", plot = grid_plots, device = "jpeg")
+
+grid_plots <- gridExtra::grid.arrange(ACE_box, Simpson_box, Fisher_box, nrow = 3)
+ggsave("grid_plot12.jpg", plot = grid_plots, device = "jpeg")
+```
+
+## Pruebas estadísticas y comparaciones
+
+### Por Shannon
+
+```{r por condición C/T}
+# By Phylum
+wilcoxon_shannon_phy <- wilcox.test(Shannon ~ cond, data = IAPHY) 
+wilcoxon_shannon_phy
+
+# By Class
+wilcoxon_shannon_cla <- wilcox.test(Shannon ~ cond, data = IACLASS) 
+wilcoxon_shannon_cla
+
+# By Class
+wilcoxon_shannon_ord <- wilcox.test(Shannon ~ cond, data = IAORDER) 
+wilcoxon_shannon_ord
+
+# By Family
+wilcoxon_shannon_fam <- wilcox.test(Shannon ~ cond, data = IAFAM) 
+wilcoxon_shannon_fam
+
+# By Genus
+wilcoxon_shannon_genus <- wilcox.test(Shannon ~ cond, data = IAGENUS) 
+wilcoxon_shannon_genus
+
+# By species
+wilcoxon_shannon_spe <- wilcox.test(Shannon ~ cond, data = IAS) 
+wilcoxon_shannon_spe
+```
+
+```{r}
+# Crear un dataframe con los resultados de todos los tests
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  Statistic = c(wilcoxon_shannon_phy$statistic,  wilcoxon_shannon_cla$statistic,
+                wilcoxon_shannon_ord$statistic, wilcoxon_shannon_fam$statistic,
+                wilcoxon_shannon_genus$statistic, wilcoxon_shannon_spe$statistic),
+  p_value = c(wilcoxon_shannon_phy$p.value, wilcoxon_shannon_cla$p.value,
+              wilcoxon_shannon_ord$p.value, wilcoxon_shannon_fam$p.value,
+              wilcoxon_shannon_genus$p.value, wilcoxon_shannon_spe$p.value)
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "wilcoxon_results.xlsx")
+```
+
+
+```{r por condición y tiempo}
+anova_results_phy <-summary(aov(Shannon ~ Time*cond, data = IAPHY))
+anova_results_class <-summary(aov(Shannon ~ Time*cond, data = IACLASS))
+anova_results_order <-summary(aov(Shannon ~ Time*cond, data = IAORDER))
+anova_results_fam <-summary(aov(Shannon ~ Time*cond, data = IAFAM))
+anova_results_genus <-summary(aov(Shannon ~ Time*cond, data = IAGENUS))
+anova_results_species <-summary(aov(Shannon ~ Time*cond, data = IAS))
+```
+
+```{r}
+# Crear un dataframe con los resultados de todos los análisis de ANOVA
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  F_value = c(anova_results_phy[[1]]$F[1], anova_results_class[[1]]$F[1],
+              anova_results_order[[1]]$F[1], anova_results_fam[[1]]$F[1],
+              anova_results_genus[[1]]$F[1], anova_results_species[[1]]$F[1]),
+  p_value = c(anova_results_phy[[1]]$Pr[1], anova_results_class[[1]]$Pr[1],
+              anova_results_order[[1]]$Pr[1], anova_results_fam[[1]]$Pr[1],
+              anova_results_genus[[1]]$Pr[1], anova_results_species[[1]]$Pr[1])
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "anova_results.xlsx")
+```
+
+
+```{r post-hoc}
+# By phylum
+aov2 <- aov(Shannon ~ Time*cond, data = IAPHY)
+# post-hoc test
+hsd_test2 <- TukeyHSD(aov2)
+hsd_test2
+hsd_res2 <- HSD.test(aov2, "Time", group=T)$groups  
+hsd_res2
+
+# By class
+aov3 <- aov(Shannon ~ Time*cond, data = IACLASS)
+# post-hoc test
+hsd_test3 <- TukeyHSD(aov3)  
+hsd_test3
+hsd_res3 <- HSD.test(aov3, "Time", group=T)$groups  
+hsd_res3
+
+# By order
+aov4 <- aov(Shannon ~ Time*cond, data = IAORDER)
+# post-hoc test
+hsd_test4 <- TukeyHSD(aov4)  
+hsd_test4
+hsd_res4 <- HSD.test(aov4, "Time", group=T)$groups  
+hsd_res4
+
+# By family
+aov5 <- aov(Shannon ~ Time*cond, data = IAFAM)
+# post-hoc test
+hsd_test5 <- TukeyHSD(aov5)   
+hsd_test5
+hsd_res5 <- HSD.test(aov5, "Time", group=T)$groups  
+hsd_res5
+
+# By genus
+aov6 <- aov(Shannon ~ Time*cond, data = IAGENUS)
+# post-hoc test
+hsd_test6 <- TukeyHSD(aov6) 
+hsd_test6
+hsd_res6 <- HSD.test(aov6, "Time", group=T)$groups  
+hsd_res6
+
+# By species
+aov1 <- aov(Shannon ~ Time*cond, data = IAS)
+# post-hoc test
+hsd_test1 <- TukeyHSD(aov1)  
+hsd_test1
+hsd_res1 <- HSD.test(aov1, "Time", group=T)$groups  
+hsd_res1
+
+```
+
+### Por Chao1
+
+```{r por condición C/T chao1}
+# By Phylum
+wilcoxon_chao1_phy <- wilcox.test(Chao1 ~ cond, data = IAPHY) 
+wilcoxon_chao1_phy
+
+# By Class
+wilcoxon_chao1_cla <- wilcox.test(Chao1 ~ cond, data = IACLASS) 
+wilcoxon_chao1_cla
+
+# By Class
+wilcoxon_chao1_ord <- wilcox.test(Chao1 ~ cond, data = IAORDER) 
+wilcoxon_chao1_ord
+
+# By Family
+wilcoxon_chao1_fam <- wilcox.test(Chao1 ~ cond, data = IAFAM) 
+wilcoxon_chao1_fam
+
+# By Genus
+wilcoxon_chao1_genus <- wilcox.test(Chao1 ~ cond, data = IAGENUS) 
+wilcoxon_chao1_genus
+
+# By species
+wilcoxon_chao1_spe <- wilcox.test(Chao1 ~ cond, data = IAS) 
+wilcoxon_chao1_spe
+```
+```{r chao1}
+# Crear un dataframe con los resultados de todos los tests
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  Statistic = c(wilcoxon_chao1_phy$statistic,  wilcoxon_chao1_cla$statistic,
+                wilcoxon_chao1_ord$statistic, wilcoxon_chao1_fam$statistic,
+                wilcoxon_chao1_genus$statistic, wilcoxon_chao1_spe$statistic),
+  p_value = c(wilcoxon_chao1_phy$p.value, wilcoxon_chao1_cla$p.value,
+              wilcoxon_chao1_ord$p.value, wilcoxon_chao1_fam$p.value,
+              wilcoxon_chao1_genus$p.value, wilcoxon_chao1_spe$p.value)
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "wilcoxon_results_chao1.xlsx")
+```
+
+
+```{r por condición y tiempo Chao1}
+anova_results_phy <-summary(aov(Chao1 ~ Time*cond, data = IAPHY))
+anova_results_class <-summary(aov(Chao1 ~ Time*cond, data = IACLASS))
+anova_results_order <-summary(aov(Chao1 ~ Time*cond, data = IAORDER))
+anova_results_fam <-summary(aov(Chao1 ~ Time*cond, data = IAFAM))
+anova_results_genus <-summary(aov(Chao1 ~ Time*cond, data = IAGENUS))
+anova_results_species <-summary(aov(Chao1 ~ Time*cond, data = IAS))
+```
+
+```{r por Chao1}
+# Crear un dataframe con los resultados de todos los análisis de ANOVA
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  F_value = c(anova_results_phy[[1]]$F[1], anova_results_class[[1]]$F[1],
+              anova_results_order[[1]]$F[1], anova_results_fam[[1]]$F[1],
+              anova_results_genus[[1]]$F[1], anova_results_species[[1]]$F[1]),
+  p_value = c(anova_results_phy[[1]]$Pr[1], anova_results_class[[1]]$Pr[1],
+              anova_results_order[[1]]$Pr[1], anova_results_fam[[1]]$Pr[1],
+              anova_results_genus[[1]]$Pr[1], anova_results_species[[1]]$Pr[1])
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "anova_results_chao1.xlsx")
+```
+
+
+```{r post-hoc chao1}
+# By phylum
+aov7 <- aov(Chao1 ~ Time*cond, data = IAPHY)
+# post-hoc test
+hsd_test7 <- TukeyHSD(aov7)
+hsd_test7
+hsd_res7 <- HSD.test(aov7, "Time", group=T)$groups  
+hsd_res7
+
+# By class
+aov8 <- aov(Chao1 ~ Time*cond, data = IACLASS)
+# post-hoc test
+hsd_test8 <- TukeyHSD(aov8)  
+hsd_test8
+hsd_res8 <- HSD.test(aov8, "Time", group=T)$groups  
+hsd_res8
+
+# By order
+aov9 <- aov(Chao1 ~ Time*cond, data = IAORDER)
+# post-hoc test
+hsd_test9 <- TukeyHSD(aov9)  
+hsd_test9
+hsd_res9 <- HSD.test(aov9, "Time", group=T)$groups  
+hsd_res9
+
+# By family
+aov10 <- aov(Chao1 ~ Time*cond, data = IAFAM)
+# post-hoc test
+hsd_test10 <- TukeyHSD(aov10)   
+hsd_test10
+hsd_res10 <- HSD.test(aov10, "Time", group=T)$groups  
+hsd_res10
+
+# By genus
+aov11 <- aov(Chao1 ~ Time*cond, data = IAGENUS)
+# post-hoc test
+hsd_test11 <- TukeyHSD(aov11) 
+hsd_test11
+hsd_res11 <- HSD.test(aov11, "Time", group=T)$groups  
+hsd_res11
+
+# By species
+aov12 <- aov(Chao1 ~ Time*cond, data = IAS)
+# post-hoc test
+hsd_test12 <- TukeyHSD(aov12)  
+hsd_test12
+hsd_res12 <- HSD.test(aov12, "Time", group=T)$groups  
+hsd_res12
+
+```
+
+
+
+### Por ACE 
+
+```{r por condición C/T ACE}
+# By Phylum
+wilcoxon_ACE_phy <- wilcox.test(ACE ~ cond, data = IAPHY) 
+wilcoxon_ACE_phy
+
+# By Class
+wilcoxon_ACE_cla <- wilcox.test(ACE ~ cond, data = IACLASS) 
+wilcoxon_ACE_cla
+
+# By Class
+wilcoxon_ACE_ord <- wilcox.test(ACE ~ cond, data = IAORDER) 
+wilcoxon_ACE_ord
+
+# By Family
+wilcoxon_ACE_fam <- wilcox.test(ACE ~ cond, data = IAFAM) 
+wilcoxon_ACE_fam
+
+# By Genus
+wilcoxon_ACE_genus <- wilcox.test(ACE ~ cond, data = IAGENUS) 
+wilcoxon_ACE_genus
+
+# By species
+wilcoxon_ACE_spe <- wilcox.test(ACE ~ cond, data = IAS) 
+wilcoxon_ACE_spe
+```
+
+```{r ace}
+# Crear un dataframe con los resultados de todos los tests
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  Statistic = c(wilcoxon_ACE_phy$statistic,  wilcoxon_ACE_cla$statistic,
+                wilcoxon_ACE_ord$statistic, wilcoxon_ACE_fam$statistic,
+                wilcoxon_ACE_genus$statistic, wilcoxon_ACE_spe$statistic),
+  p_value = c(wilcoxon_ACE_phy$p.value, wilcoxon_ACE_cla$p.value,
+              wilcoxon_ACE_ord$p.value, wilcoxon_ACE_fam$p.value,
+              wilcoxon_ACE_genus$p.value, wilcoxon_ACE_spe$p.value)
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "wilcoxon_results_ace.xlsx")
+```
+
+```{r por condición y tiempo ACE}
+anova_results_phy <-summary(aov(ACE ~ Time*cond, data = IAPHY))
+anova_results_class <-summary(aov(ACE ~ Time*cond, data = IACLASS))
+anova_results_order <-summary(aov(ACE ~ Time*cond, data = IAORDER))
+anova_results_fam <-summary(aov(ACE ~ Time*cond, data = IAFAM))
+anova_results_genus <-summary(aov(ACE ~ Time*cond, data = IAGENUS))
+anova_results_species <-summary(aov(ACE ~ Time*cond, data = IAS))
+```
+
+```{r por ACE}
+# Crear un dataframe con los resultados de todos los análisis de ANOVA
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  F_value = c(anova_results_phy[[1]]$F[1], anova_results_class[[1]]$F[1],
+              anova_results_order[[1]]$F[1], anova_results_fam[[1]]$F[1],
+              anova_results_genus[[1]]$F[1], anova_results_species[[1]]$F[1]),
+  p_value = c(anova_results_phy[[1]]$Pr[1], anova_results_class[[1]]$Pr[1],
+              anova_results_order[[1]]$Pr[1], anova_results_fam[[1]]$Pr[1],
+              anova_results_genus[[1]]$Pr[1], anova_results_species[[1]]$Pr[1])
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "anova_results_ACE.xlsx")
+```
+
+```{r post-hoc ACE}
+# By phylum
+aov13 <- aov(ACE ~ Time*cond, data = IAPHY)
+# post-hoc test
+hsd_test13 <- TukeyHSD(aov13)
+hsd_test13
+hsd_res13 <- HSD.test(aov13, "Time", group=T)$groups  
+hsd_res13
+
+# By class
+aov14 <- aov(ACE ~ Time*cond, data = IACLASS)
+# post-hoc test
+hsd_test14 <- TukeyHSD(aov14)  
+hsd_test14
+hsd_res14 <- HSD.test(aov14, "Time", group=T)$groups  
+hsd_res14
+
+# By order
+aov15 <- aov(ACE ~ Time*cond, data = IAORDER)
+# post-hoc test
+hsd_test15 <- TukeyHSD(aov15)  
+hsd_test15
+hsd_res15 <- HSD.test(aov15, "Time", group=T)$groups  
+hsd_res15
+
+# By family
+aov16 <- aov(ACE ~ Time*cond, data = IAFAM)
+# post-hoc test
+hsd_test16 <- TukeyHSD(aov16)   
+hsd_test16
+hsd_res16 <- HSD.test(aov16, "Time", group=T)$groups  
+hsd_res16
+
+# By genus
+aov17 <- aov(ACE ~ Time*cond, data = IAGENUS)
+# post-hoc test
+hsd_test17 <- TukeyHSD(aov17) 
+hsd_test17
+hsd_res17 <- HSD.test(aov17, "Time", group=T)$groups  
+hsd_res17
+
+# By species
+aov18 <- aov(ACE ~ Time*cond, data = IAS)
+# post-hoc test
+hsd_test18 <- TukeyHSD(aov18)  
+hsd_test18
+hsd_res18 <- HSD.test(aov18, "Time", group=T)$groups  
+hsd_res18
+
+```
+
+
+
+### Por Simpson
+
+```{r por condición C/T Simpson}
+# By Phylum
+wilcoxon_simp_phy <- wilcox.test(Simpson ~ cond, data = IAPHY) 
+wilcoxon_simp_phy
+
+# By Class
+wilcoxon_simp_cla <- wilcox.test(Simpson ~ cond, data = IACLASS) 
+wilcoxon_simp_cla
+
+# By Class
+wilcoxon_simp_ord <- wilcox.test(Simpson ~ cond, data = IAORDER) 
+wilcoxon_simp_ord
+
+# By Family
+wilcoxon_simp_fam <- wilcox.test(Simpson ~ cond, data = IAFAM) 
+wilcoxon_simp_fam
+
+# By Genus
+wilcoxon_simp_genus <- wilcox.test(Simpson ~ cond, data = IAGENUS) 
+wilcoxon_simp_genus
+
+# By species
+wilcoxon_simp_spe <- wilcox.test(Simpson ~ cond, data = IAS) 
+wilcoxon_simp_spe
+```
+
+```{r Simpson}
+# Crear un dataframe con los resultados de todos los tests
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  Statistic = c(wilcoxon_simp_phy$statistic,  wilcoxon_simp_cla$statistic,
+                wilcoxon_simp_ord$statistic, wilcoxon_simp_fam$statistic,
+                wilcoxon_simp_genus$statistic, wilcoxon_simp_spe$statistic),
+  p_value = c(wilcoxon_simp_phy$p.value, wilcoxon_simp_cla$p.value,
+              wilcoxon_simp_ord$p.value, wilcoxon_simp_fam$p.value,
+              wilcoxon_simp_genus$p.value, wilcoxon_simp_spe$p.value)
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "wilcoxon_results_simpson.xlsx")
+```
+
+```{r por condición y tiempo Simpson}
+anova_results_phy <-summary(aov(Simpson ~ Time*cond, data = IAPHY))
+anova_results_class <-summary(aov(Simpson ~ Time*cond, data = IACLASS))
+anova_results_order <-summary(aov(Simpson ~ Time*cond, data = IAORDER))
+anova_results_fam <-summary(aov(Simpson ~ Time*cond, data = IAFAM))
+anova_results_genus <-summary(aov(Simpson ~ Time*cond, data = IAGENUS))
+anova_results_species <-summary(aov(Simpson ~ Time*cond, data = IAS))
+```
+
+```{r por Simpson}
+# Crear un dataframe con los resultados de todos los análisis de ANOVA
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  F_value = c(anova_results_phy[[1]]$F[1], anova_results_class[[1]]$F[1],
+              anova_results_order[[1]]$F[1], anova_results_fam[[1]]$F[1],
+              anova_results_genus[[1]]$F[1], anova_results_species[[1]]$F[1]),
+  p_value = c(anova_results_phy[[1]]$Pr[1], anova_results_class[[1]]$Pr[1],
+              anova_results_order[[1]]$Pr[1], anova_results_fam[[1]]$Pr[1],
+              anova_results_genus[[1]]$Pr[1], anova_results_species[[1]]$Pr[1])
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "anova_results_simpson.xlsx")
+```
+
+```{r post-hoc Simpson}
+# By phylum
+aov19 <- aov(Simpson ~ Time*cond, data = IAPHY)
+# post-hoc test
+hsd_test19 <- TukeyHSD(aov19)
+hsd_test19
+hsd_res19 <- HSD.test(aov19, "Time", group=T)$groups  
+hsd_res19
+
+# By class
+aov20 <- aov(Simpson ~ Time*cond, data = IACLASS)
+# post-hoc test
+hsd_test20 <- TukeyHSD(aov20)  
+hsd_test20
+hsd_res20 <- HSD.test(aov20, "Time", group=T)$groups  
+hsd_res20
+
+# By order
+aov21 <- aov(Simpson ~ Time*cond, data = IAORDER)
+# post-hoc test
+hsd_test21 <- TukeyHSD(aov21)  
+hsd_test21
+hsd_res21 <- HSD.test(aov21, "Time", group=T)$groups  
+hsd_res21
+
+# By family
+aov22 <- aov(Simpson ~ Time*cond, data = IAFAM)
+# post-hoc test
+hsd_test22 <- TukeyHSD(aov22)   
+hsd_test22
+hsd_res22 <- HSD.test(aov22, "Time", group=T)$groups  
+hsd_res22
+
+# By genus
+aov23 <- aov(Simpson ~ Time*cond, data = IAGENUS)
+# post-hoc test
+hsd_test23 <- TukeyHSD(aov23) 
+hsd_test23
+hsd_res23 <- HSD.test(aov23, "Time", group=T)$groups  
+hsd_res23
+
+# By species
+aov24 <- aov(Simpson ~ Time*cond, data = IAS)
+# post-hoc test
+hsd_test24 <- TukeyHSD(aov24)  
+hsd_test24
+hsd_res24 <- HSD.test(aov24, "Time", group=T)$groups  
+hsd_res24
+
+```
+
+
+
+### Por Fisher
+
+```{r por condición C/T Fisher}
+# By Phylum
+wilcoxon_fisher_phy <- wilcox.test(Fisher ~ cond, data = IAPHY) 
+wilcoxon_fisher_phy
+
+# By Class
+wilcoxon_fisher_cla <- wilcox.test(Fisher ~ cond, data = IACLASS) 
+wilcoxon_fisher_cla
+
+# By Class
+wilcoxon_fisher_ord <- wilcox.test(Fisher ~ cond, data = IAORDER) 
+wilcoxon_fisher_ord
+
+# By Family
+wilcoxon_fisher_fam <- wilcox.test(Fisher ~ cond, data = IAFAM) 
+wilcoxon_fisher_fam
+
+# By Genus
+wilcoxon_fisher_genus <- wilcox.test(Fisher ~ cond, data = IAGENUS) 
+wilcoxon_fisher_genus
+
+# By species
+wilcoxon_fisher_spe <- wilcox.test(Fisher ~ cond, data = IAS) 
+wilcoxon_fisher_spe
+```
+
+
+```{r Fisher}
+# Crear un dataframe con los resultados de todos los tests
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  Statistic = c(wilcoxon_fisher_phy$statistic,  wilcoxon_fisher_cla$statistic,
+                wilcoxon_fisher_ord$statistic, wilcoxon_fisher_fam$statistic,
+                wilcoxon_fisher_genus$statistic, wilcoxon_fisher_spe$statistic),
+  p_value = c(wilcoxon_fisher_phy$p.value, wilcoxon_fisher_cla$p.value,
+              wilcoxon_fisher_ord$p.value, wilcoxon_fisher_fam$p.value,
+              wilcoxon_fisher_genus$p.value, wilcoxon_fisher_spe$p.value)
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "wilcoxon_results_fisher.xlsx")
+```
+
+```{r por condición y tiempo Fisher}
+anova_results_phy <-summary(aov(Fisher ~ Time*cond, data = IAPHY))
+anova_results_class <-summary(aov(Fisher ~ Time*cond, data = IACLASS))
+anova_results_order <-summary(aov(Fisher ~ Time*cond, data = IAORDER))
+anova_results_fam <-summary(aov(Fisher ~ Time*cond, data = IAFAM))
+anova_results_genus <-summary(aov(Fisher ~ Time*cond, data = IAGENUS))
+anova_results_species <-summary(aov(Fisher ~ Time*cond, data = IAS))
+```
+
+```{r por Fisher}
+# Crear un dataframe con los resultados de todos los análisis de ANOVA
+results <- data.frame(
+  Taxonomic_Level = c("Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  F_value = c(anova_results_phy[[1]]$F[1], anova_results_class[[1]]$F[1],
+              anova_results_order[[1]]$F[1], anova_results_fam[[1]]$F[1],
+              anova_results_genus[[1]]$F[1], anova_results_species[[1]]$F[1]),
+  p_value = c(anova_results_phy[[1]]$Pr[1], anova_results_class[[1]]$Pr[1],
+              anova_results_order[[1]]$Pr[1], anova_results_fam[[1]]$Pr[1],
+              anova_results_genus[[1]]$Pr[1], anova_results_species[[1]]$Pr[1])
+)
+
+# Escribir los resultados en un archivo Excel
+write_xlsx(results, path = "anova_results_fisher2.xlsx")
+```
+
+```{r post-hoc Fisher}
+# By phylum
+aov25 <- aov(Fisher ~ Time*cond, data = IAPHY)
+# post-hoc test
+hsd_test25 <- TukeyHSD(aov25)
+hsd_test25
+hsd_res25 <- HSD.test(aov25, "Time", group=T)$groups  
+hsd_res25
+
+# By class
+aov26 <- aov(Fisher ~ Time*cond, data = IACLASS)
+# post-hoc test
+hsd_test26 <- TukeyHSD(aov26)  
+hsd_test26
+hsd_res26 <- HSD.test(aov26, "Time", group=T)$groups  
+hsd_res26
+
+# By order
+aov27 <- aov(Fisher ~ Time*cond, data = IAORDER)
+# post-hoc test
+hsd_test27 <- TukeyHSD(aov27)  
+hsd_test27
+hsd_res27 <- HSD.test(aov27, "Time", group=T)$groups  
+hsd_res27
+
+# By family
+aov28 <- aov(Fisher ~ Time*cond, data = IAFAM)
+# post-hoc test
+hsd_test28 <- TukeyHSD(aov28)   
+hsd_test28
+hsd_res28 <- HSD.test(aov28, "Time", group=T)$groups  
+hsd_res28
+
+# By genus
+aov29 <- aov(Fisher ~ Time*cond, data = IAGENUS)
+# post-hoc test
+hsd_test29 <- TukeyHSD(aov29) 
+hsd_test29
+hsd_res29 <- HSD.test(aov29, "Time", group=T)$groups  
+hsd_res29
+
+# By species
+aov30 <- aov(Fisher ~ Time*cond, data = IAS)
+# post-hoc test
+hsd_test30 <- TukeyHSD(aov30)  
+hsd_test30
+hsd_res30 <- HSD.test(aov30, "Time", group=T)$groups  
+hsd_res30
+
+```
+
+## Análisis de β-diversidad
+
+
+La diversidad beta expresa la diferencia en la composición de las especies entre las muestras.
+
+### Cálculo de la matriz de distancia con el método de Bray Curtis y Weighted UniFrac. Y cluster análisis (Ward).
+
+Para el cálculo de la distancia/disimilitud del objeto _phyloseq_ se utiliza la función *distance*. Los métodos utilizados han sido el de _Bray Curtis_ ("bray") y el de _Weighted-UniFrac_ ("wunifrac") (2, 7).
+
+Para el clúster análisis se utiliza la función *agnes* del paquete *cluster* (8), que calcula la agrupación jerárquica aglomerativa del conjunto de los datos, y para ello se utiliza el método de Ward (9).
+
+
+#### Por filo
+
+```{r}
+# Cálculo de la distancia de matriz por el método de BC
+dist_matrix_phy_bc <- phyloseq::distance(ps_phylum, method = "bray")
+dist_matrix_phy_bc <- as.matrix(dist_matrix_phy_bc)
+write.csv(dist_matrix_phy_bc, file="dist_matrix_phy_bc", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Cálculo de la distancia de matriz por el método de WU
+dist_matrix_phy_wu <- phyloseq::distance(ps_phylum, method = "wunifrac")
+dist_matrix_phy_wu <- as.matrix(dist_matrix_phy_wu)
+write.csv(dist_matrix_phy_wu, file="dist_matrix_phy_wu", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Dendrograma
+clust_matrix_phy_bc <- agnes(dist_matrix_phy_bc, method = "ward")
+pltree(clust_matrix_phy_bc, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+clust_matrix_phy_wu <- agnes(dist_matrix_phy_wu, method = "ward")
+pltree(clust_matrix_phy_wu, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+```
+
+#### Por clase
+
+```{r}
+# Cálculo de la distancia de matriz por el método de BC
+dist_matrix_class_bc <- phyloseq::distance(ps_class, method = "bray")
+dist_matrix_class_bc <- as.matrix(dist_matrix_class_bc)
+write.csv(dist_matrix_class_bc, file="dist_matrix_class_bc", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Cálculo de la distancia de matriz por el método de WU
+dist_matrix_class_wu <- phyloseq::distance(ps_class, method = "wunifrac")
+dist_matrix_class_wu <- as.matrix(dist_matrix_class_wu)
+write.csv(dist_matrix_class_wu, file="dist_matrix_class_wu", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Dendrograma
+clust_matrix_class_bc <- agnes(dist_matrix_class_bc, method = "ward")
+pltree(clust_matrix_class_bc, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+clust_matrix_class_wu <- agnes(dist_matrix_class_wu, method = "ward")
+pltree(clust_matrix_class_wu, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+```
+
+#### Por orden
+
+```{r}
+# Cálculo de la distancia de matriz por el método de BC
+dist_matrix_order_bc <- phyloseq::distance(ps_ord, method = "bray")
+dist_matrix_order_bc <- as.matrix(dist_matrix_order_bc)
+write.csv(dist_matrix_order_bc, file="dist_matrix_order_bc", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Cálculo de la distancia de matriz por el método de WU
+dist_matrix_order_wu <- phyloseq::distance(ps_ord, method = "wunifrac")
+dist_matrix_order_wu <- as.matrix(dist_matrix_order_wu)
+write.csv(dist_matrix_order_wu, file="dist_matrix_order_wu", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Dendrograma
+clust_matrix_order_bc <- agnes(dist_matrix_order_bc, method = "ward")
+pltree(clust_matrix_order_bc, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+clust_matrix_order_wu <- agnes(dist_matrix_order_wu, method = "ward")
+pltree(clust_matrix_order_wu, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+```
+
+#### Por familia
+
+```{r}
+# Cálculo de la distancia de matriz por el método de BC
+dist_matrix_fam_bc <- phyloseq::distance(ps_fam, method = "bray")
+dist_matrix_fam_bc <- as.matrix(dist_matrix_fam_bc)
+write.csv(dist_matrix_fam_bc, file="dist_matrix_fam_bc", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Cálculo de la distancia de matriz por el método de WU
+dist_matrix_fam_wu <- phyloseq::distance(ps_fam, method = "wunifrac")
+dist_matrix_fam_wu <- as.matrix(dist_matrix_fam_wu)
+write.csv(dist_matrix_fam_wu, file="dist_matrix_fam_wu", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Dendrograma
+clust_matrix_fam_bc <- agnes(dist_matrix_fam_bc, method = "ward")
+pltree(clust_matrix_fam_bc, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+clust_matrix_fam_wu <- agnes(dist_matrix_fam_wu, method = "ward")
+pltree(clust_matrix_fam_wu, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+```
+
+#### Por género
+
+```{r}
+# Cálculo de la distancia de matriz por el método de BC
+dist_matrix_gen_bc <- phyloseq::distance(ps_genus, method = "bray")
+dist_matrix_gen_bc <- as.matrix(dist_matrix_gen_bc)
+write.csv(dist_matrix_gen_bc, file="dist_matrix_gen_bc", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Cálculo de la distancia de matriz por el método de WU
+dist_matrix_gen_wu <- phyloseq::distance(ps_genus, method = "wunifrac")
+dist_matrix_gen_wu <- as.matrix(dist_matrix_gen_wu)
+write.csv(dist_matrix_gen_wu, file="dist_matrix_gen_wu", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Dendrograma
+clust_matrix_gen_bc <- agnes(dist_matrix_gen_bc, method = "ward")
+pltree(clust_matrix_gen_bc, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+clust_matrix_gen_wu <- agnes(dist_matrix_gen_wu, method = "ward")
+pltree(clust_matrix_gen_wu, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+```
+
+#### Por especie
+
+```{r}
+# Cálculo de la distancia de matriz por el método de BC
+dist_matrix_rare_bc <- phyloseq::distance(ps_rare, method = "bray")
+dist_matrix_rare_bc <- as.matrix(dist_matrix_rare_bc)
+write.csv(dist_matrix_rare_bc, file="matriz_dist_rare_bc", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Cálculo de la distancia de matriz por el método de WU
+dist_matrix_rare_wu <- phyloseq::distance(ps_rare, method = "wunifrac")
+dist_matrix_rare_wu <- as.matrix(dist_matrix_rare_wu)
+write.csv(dist_matrix_rare_wu, file="matriz_dist_rare_wu", row.names = T) # se guarda el resultado en un archivo excel.
+
+# Dendrograma
+clust_matrix_rare_bc <- agnes(dist_matrix_rare_bc, method = "ward")
+pltree(clust_matrix_rare_bc, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+clust_matrix_rare_wu <- agnes(dist_matrix_rare_wu, method = "ward")
+pltree(clust_matrix_rare_wu, cex = 0.6, hang = -1, main = "Cluster Dendrogram")
+
+```
+
+
+### Análisis de ordenación y gráficos: NDMS y PCoA con el método de Bray Curtis y Weigthed UniFrac
+
+#### Por condición
+
+```{r bdiv-NMDS-bray}
+ps_phylum_bray <- ordinate(ps_phylum, "NMDS", "bray")
+ps_class_bray <- ordinate(ps_class, "NMDS", "bray")
+ps_order_bray <- ordinate(ps_ord, "NMDS", "bray")
+ps_fam_bray <- ordinate(ps_fam, "NMDS", "bray")
+ps_gen_bray <- ordinate(ps_genus, "NMDS", "bray")
+ps_spe_bray <- ordinate(ps_rare, "NMDS", "bray")
+```
+
+```{r bdiv-PCoA-bray}
+ps_phylum_pcoa_bray <- ordinate(ps_phylum, "PCoA", "bray")
+ps_class_pcoa_bray <- ordinate(ps_class, "PCoA", "bray")
+ps_order_pcoa_bray <- ordinate(ps_ord, "PCoA", "bray")
+ps_fam_pcoa_bray <- ordinate(ps_fam, "PCoA", "bray")
+ps_genus_pcoa_bray <- ordinate(ps_genus, "PCoA", "bray")
+ps_spec_pcoa_bray <- ordinate(ps_rare, "PCoA", "bray")
+```
+
+```{r bdiv-NDMS-w}
+ps_phylum_w <- ordinate(ps_fam, "NMDS", "wunifrac")
+ps_class_w <- ordinate(ps_class, "NMDS", "wunifrac")
+ps_order_w <- ordinate(ps_ord, "NMDS", "wunifrac")
+ps_fam_w <- ordinate(ps_fam, "NMDS", "wunifrac")
+ps_genus_w <- ordinate(ps_genus, "NMDS", "wunifrac")
+ps_spec_w <- ordinate(ps_rare, "NMDS", "wunifrac")
+```
+
+```{r bdiv-PCoA-w}
+ps_phylum_wpcoa <- ordinate(ps_phylum, "PCoA", "wunifrac")
+ps_class_wpcoa <- ordinate(ps_class, "PCoA", "wunifrac")
+ps_order_wpcoa <- ordinate(ps_ord, "PCoA", "wunifrac")
+ps_fam_wpcoa <- ordinate(ps_fam, "PCoA", "wunifrac")
+ps_genus_wpcoa <- ordinate(ps_genus, "PCoA", "wunifrac")
+ps_spec_wpcoa <- ordinate(ps_rare, "PCoA", "wunifrac")
+```
+
+
+
+La función *plot_ordination* de _phyloseq_ genera un gráfico de la ordenación general basada en *ggplot2* (10). 
+
+#### PCoA y NDMS con el método de Bray Curtis 
+
+##### Por filo
+
+```{r biplot3}
+p3 <- plot_ordination(ps_phylum, ps_phylum_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p3 <- p3 + scale_color_manual(values = custom_colors)
+
+p3
+```
+```{r biplot4}
+p4 <- plot_ordination(ps_phylum, ps_phylum_pcoa_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p4 <- p4 + scale_color_manual(values = custom_colors)
+
+p4
+```
+
+
+##### Por clase
+
+```{r biplot5}
+p5 <- plot_ordination(ps_class, ps_class_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p5 <- p5 + scale_color_manual(values = custom_colors)
+
+p5
+```
+```{r biplot6}
+p6 <- plot_ordination(ps_class, ps_class_pcoa_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p6 <- p6 + scale_color_manual(values = custom_colors)
+
+p6
+```
+
+##### Por orden
+
+```{r biplot7}
+p7 <- plot_ordination(ps_ord, ps_order_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p7 <- p7 + scale_color_manual(values = custom_colors)
+
+p7
+```
+```{r biplot8}
+p8 <- plot_ordination(ps_ord, ps_order_pcoa_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p8 <- p8 + scale_color_manual(values = custom_colors)
+
+p8
+```
+
+##### Por familia
+
+```{r biplot9}
+p9 <- plot_ordination(ps_fam, ps_fam_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p9 <- p9 + scale_color_manual(values = custom_colors)
+
+p9
+```
+```{r biplot10}
+p10 <- plot_ordination(ps_fam, ps_fam_pcoa_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p10 <- p10 + scale_color_manual(values = custom_colors)
+
+p10
+```
+
+##### Por género
+
+```{r biplot11}
+p11 <- plot_ordination(ps_genus, ps_gen_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p11 <- p11 + scale_color_manual(values = custom_colors)
+
+p11
+```
+```{r biplot12}
+p10 <- plot_ordination(ps_genus, ps_genus_pcoa_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p10 <- p10 + scale_color_manual(values = custom_colors)
+
+p10
+```
+
+
+##### Por especie
+
+```{r biplot1}
+p1 <- plot_ordination(ps_rare, ps_spe_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p1 <- p1 + scale_color_manual(values = custom_colors)
+
+p1
+
+```
+
+```{r biplot2}
+p2 <- plot_ordination(ps_rare, ps_spec_pcoa_bray, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p2 <- p2 + scale_color_manual(values = custom_colors)
+
+p2
+```
+
+
+
+
+### PCoA y NDMS con el método de Weigthed UniFrac
+
+##### Por filo
+
+```{r biplot15}
+p15 <- plot_ordination(ps_phylum, ps_phylum_w, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p15 <- p15 + scale_color_manual(values = custom_colors)
+
+p15
+```
+```{r biplot16}
+p16 <- plot_ordination(ps_phylum, ps_phylum_wpcoa, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p16 <- p16 + scale_color_manual(values = custom_colors)
+
+p16
+```
+
+
+##### Por clase
+
+```{r biplot17}
+p17 <- plot_ordination(ps_class, ps_class_w, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p17 <- p17 + scale_color_manual(values = custom_colors)
+
+p17
+```
+```{r biplot18}
+p18 <- plot_ordination(ps_class, ps_class_wpcoa, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p18 <- p18 + scale_color_manual(values = custom_colors)
+
+p18
+```
+
+##### Por orden
+
+```{r biplot19}
+p19 <- plot_ordination(ps_ord, ps_order_w, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p19 <- p19 + scale_color_manual(values = custom_colors)
+
+p19
+```
+```{r biplot20}
+p20 <- plot_ordination(ps_ord, ps_order_wpcoa, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p20 <- p20 + scale_color_manual(values = custom_colors)
+
+p20
+```
+
+
+##### Por familia
+
+```{r biplot21}
+p21 <- plot_ordination(ps_fam, ps_fam_w, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p21 <- p21 + scale_color_manual(values = custom_colors)
+
+p21
+```
+```{r biplot22}
+p22 <- plot_ordination(ps_fam, ps_fam_wpcoa, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p22 <- p22 + scale_color_manual(values = custom_colors)
+
+p22
+```
+
+##### Por género
+
+```{r biplot23}
+p23 <- plot_ordination(ps_genus, ps_genus_w, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p23 <- p23 + scale_color_manual(values = custom_colors)
+
+p23
+```
+```{r biplot24}
+p24 <- plot_ordination(ps_genus, ps_genus_wpcoa, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p24 <- p24 + scale_color_manual(values = custom_colors)
+
+p24
+```
+
+##### Por especie
+
+```{r biplot13}
+p13 <- plot_ordination(ps_rare, ps_spec_w, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p13 <- p13 + scale_color_manual(values = custom_colors)
+
+p13
+```
+```{r biplot14}
+p14 <- plot_ordination(ps_rare, ps_spec_wpcoa, color="cond", shape="Time", label="Time") +
+  geom_point(aes(color = cond, shape = Time), size = 3) +
+  labs(color = "cond") +
+  theme_bw()
+# Especificar los colores para cada componente de "cond"
+custom_colors <- c("C" = "green", "T" = "red")
+p14 <- p14 + scale_color_manual(values = custom_colors)
+
+p14
+```
+
+## Pruebas estadísticas y comparaciones
+
+
+```{r nuevo metadato}
+metadata5 <- read.table("metadata5.txt", header = TRUE, sep = "\t")
+metadata5[is.na(metadata5)] <- 0
+head(metadata5)
+```
+
+### PERMANOVA
+
+PERMANOVA (_Permutational Multivariate Analysis of Variance_) es una técnica basada en la permutación, por lo que no realiza suposiciones de distribución sobre la normalidad multivariante o la homogeneidad de las varianzas. La implementación en R se realiza a partir de la función *adonis2* de _vegan_ (11, 12, 13).
+
+
+#### Por cada nivel taxonómico en función de la condición (C - T) y el tiempo (T1 - T4)
+
+```{r prueba adonis2 especie cond-time}
+ado1 <- adonis2(dist_matrix_rare_bc ~ cond*Time, metadata5)
+ado2 <- adonis2(dist_matrix_rare_wu ~ cond*Time, metadata5)
+ado3 <- adonis2(dist_matrix_phy_bc ~ cond*Time, metadata5)
+ado4 <- adonis2(dist_matrix_phy_wu ~ cond*Time, metadata5)
+ado5 <- adonis2(dist_matrix_class_bc ~ cond*Time, metadata5)
+ado6 <- adonis2(dist_matrix_class_wu ~ cond*Time, metadata5)
+ado7 <- adonis2(dist_matrix_order_bc ~ cond*Time, metadata5)
+ado8 <- adonis2(dist_matrix_order_wu ~ cond*Time, metadata5)
+ado9 <- adonis2(dist_matrix_fam_bc ~ cond*Time, metadata5)
+ado10 <- adonis2(dist_matrix_fam_wu ~ cond*Time, metadata5)
+ado11 <- adonis2(dist_matrix_gen_bc ~ cond*Time, metadata5)
+ado12 <- adonis2(dist_matrix_gen_wu ~ cond*Time, metadata5)
+
+print(ado1)
+print(ado2)
+print(ado3)
+print(ado4)
+print(ado5)
+print(ado6)
+print(ado7)
+print(ado8)
+print(ado9)
+print(ado10)
+print(ado11)
+print(ado12)
+```
+
+#### Por filo
+
+```{r adonis2 condicion por cada tiempo phy- bc/wu}
+ado_phy_t1bc  <- adonis2(dist_matrix_phy_bc ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_phy_t2bc  <- adonis2(dist_matrix_phy_bc ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_phy_t3bc  <- adonis2(dist_matrix_phy_bc ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_phy_t4bc  <- adonis2(dist_matrix_phy_bc ~ cond + (as.numeric(Time=="T4")) , metadata5)
+ado_phy_t1wu  <- adonis2(dist_matrix_phy_wu ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_phy_t2wu  <- adonis2(dist_matrix_phy_wu ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_phy_t3wu  <- adonis2(dist_matrix_phy_wu ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_phy_t4wu  <- adonis2(dist_matrix_phy_wu ~ cond + (as.numeric(Time=="T4")) , metadata5)
+
+print(ado_phy_t1bc)
+print(ado_phy_t2bc)
+print(ado_phy_t3bc)
+print(ado_phy_t4bc)
+print(ado_phy_t1wu)
+print(ado_phy_t2wu)
+print(ado_phy_t3wu)
+print(ado_phy_t4wu)
+```
+
+#### Por clase
+
+```{r adonis2 condicion por cada tiempo class- bc/wu}
+ado_class_t1bc  <- adonis2(dist_matrix_class_bc ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_class_t2bc  <- adonis2(dist_matrix_class_bc ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_class_t3bc  <- adonis2(dist_matrix_class_bc ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_class_t4bc  <- adonis2(dist_matrix_class_bc ~ cond + (as.numeric(Time=="T4")) , metadata5)
+ado_class_t1wu  <- adonis2(dist_matrix_class_wu ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_class_t2wu  <- adonis2(dist_matrix_class_wu ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_class_t3wu  <- adonis2(dist_matrix_class_wu ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_class_t4wu  <- adonis2(dist_matrix_class_wu ~ cond + (as.numeric(Time=="T4")) , metadata5)
+
+print(ado_class_t1bc)
+print(ado_class_t2bc)
+print(ado_class_t3bc)
+print(ado_class_t4bc)
+print(ado_class_t1wu)
+print(ado_class_t2wu)
+print(ado_class_t3wu)
+print(ado_class_t4wu)
+```
+
+#### Por orden
+
+```{r adonis2 condicion por cada tiempo order- bc/wu}
+ado_order_t1bc  <- adonis2(dist_matrix_order_bc ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_order_t2bc  <- adonis2(dist_matrix_order_bc ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_order_t3bc  <- adonis2(dist_matrix_order_bc ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_order_t4bc  <- adonis2(dist_matrix_order_bc ~ cond + (as.numeric(Time=="T4")) , metadata5)
+ado_order_t1wu  <- adonis2(dist_matrix_order_wu ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_order_t2wu  <- adonis2(dist_matrix_order_wu ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_order_t3wu  <- adonis2(dist_matrix_order_wu ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_order_t4wu  <- adonis2(dist_matrix_order_wu ~ cond + (as.numeric(Time=="T4")) , metadata5)
+
+print(ado_order_t1bc)
+print(ado_order_t2bc)
+print(ado_order_t3bc)
+print(ado_order_t4bc)
+print(ado_order_t1wu)
+print(ado_order_t2wu)
+print(ado_order_t3wu)
+print(ado_order_t4wu)
+```
+
+#### Por familia
+
+```{r adonis2 condicion por cada tiempo fam- bc/wu}
+ado_fam_t1bc  <- adonis2(dist_matrix_fam_bc ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_fam_t2bc  <- adonis2(dist_matrix_fam_bc ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_fam_t3bc  <- adonis2(dist_matrix_fam_bc ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_fam_t4bc  <- adonis2(dist_matrix_fam_bc ~ cond + (as.numeric(Time=="T4")) , metadata5)
+ado_fam_t1wu  <- adonis2(dist_matrix_fam_wu ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_fam_t2wu  <- adonis2(dist_matrix_fam_wu ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_fam_t3wu  <- adonis2(dist_matrix_fam_wu ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_fam_t4wu  <- adonis2(dist_matrix_fam_wu ~ cond + (as.numeric(Time=="T4")) , metadata5)
+
+print(ado_fam_t1bc)
+print(ado_fam_t2bc)
+print(ado_fam_t3bc)
+print(ado_fam_t4bc)
+print(ado_fam_t1wu)
+print(ado_fam_t2wu)
+print(ado_fam_t3wu)
+print(ado_fam_t4wu)
+```
+
+#### Por género
+
+```{r adonis2 condicion por cada tiempo gen- bc/wu}
+ado_gen_t1bc  <- adonis2(dist_matrix_gen_bc ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_gen_t2bc  <- adonis2(dist_matrix_gen_bc ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_gen_t3bc  <- adonis2(dist_matrix_gen_bc ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_gen_t4bc  <- adonis2(dist_matrix_gen_bc ~ cond + (as.numeric(Time=="T4")) , metadata5)
+ado_gen_t1wu  <- adonis2(dist_matrix_gen_wu ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_gen_t2wu  <- adonis2(dist_matrix_gen_wu ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_gen_t3wu  <- adonis2(dist_matrix_gen_wu ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_gen_t4wu  <- adonis2(dist_matrix_gen_wu ~ cond + (as.numeric(Time=="T4")) , metadata5)
+
+print(ado_gen_t1bc)
+print(ado_gen_t2bc)
+print(ado_gen_t3bc)
+print(ado_gen_t4bc)
+print(ado_gen_t1wu)
+print(ado_gen_t2wu)
+print(ado_gen_t3wu)
+print(ado_gen_t4wu)
+```
+
+#### Por especie
+
+```{r adonis2 condicion por cada tiempo rare- bc/wu}
+ado_rare_t1bc  <- adonis2(dist_matrix_rare_bc ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_rare_t2bc  <- adonis2(dist_matrix_rare_bc ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_rare_t3bc  <- adonis2(dist_matrix_rare_bc ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_rare_t4bc  <- adonis2(dist_matrix_rare_bc ~ cond + (as.numeric(Time=="T4")) , metadata5)
+ado_rare_t1wu  <- adonis2(dist_matrix_rare_wu ~ cond + (as.numeric(Time=="T1")) , metadata5)
+ado_rare_t2wu  <- adonis2(dist_matrix_rare_wu ~ cond + (as.numeric(Time=="T2")) , metadata5)
+ado_rare_t3wu  <- adonis2(dist_matrix_rare_wu ~ cond + (as.numeric(Time=="T3")) , metadata5)
+ado_rare_t4wu  <- adonis2(dist_matrix_rare_wu ~ cond + (as.numeric(Time=="T4")) , metadata5)
+
+print(ado_rare_t1bc)
+print(ado_rare_t2bc)
+print(ado_rare_t3bc)
+print(ado_rare_t4bc)
+print(ado_rare_t1wu)
+print(ado_rare_t2wu)
+print(ado_rare_t3wu)
+print(ado_rare_t4wu)
+```
+
+
+### ANOSIM
+
+Con la función de anosim, también de vegan, se intenta probar si existe una diferencia estadística entre las comunidades microbianas de dos o más grupos de muestras. Para ello se utiliza una matriz de disimilitud como entrada en lugar de datos sin procesar (14, 15, 16) .
+
+#### By family
+
+```{r}
+# Realizar el análisis Anosim
+anosim_cond_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$cond)
+anosim_c_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$cond=="C")
+anosim_t_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$cond=="T")
+print(anosim_cond_fam_bc)
+print(anosim_c_fam_bc)
+print(anosim_t_fam_bc)
+
+anosim_condtime_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$Cond.T)
+print(anosim_condtime_fam_bc)
+
+anosim_time_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$Time)
+anosim_t1_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$Time=="T1")
+anosim_t2_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$Time=="T2")
+anosim_t3_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$Time=="T3")
+anosim_t4_fam_bc <- anosim(dist_matrix_fam_bc, metadata5$Time=="T4")
+print(anosim_time_fam_bc)
+print(anosim_t1_fam_bc)
+print(anosim_t2_fam_bc)
+print(anosim_t3_fam_bc)
+print(anosim_t4_fam_bc)
+```
+
+```{r}
+# wu
+anosim_cond_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$cond)
+anosim_c_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$cond=="C")
+anosim_t_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$cond=="T")
+print(anosim_cond_fam_wu)
+print(anosim_c_fam_wu)
+print(anosim_t_fam_wu)
+
+anosim_condtime_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$Cond.T)
+print(anosim_condtime_fam_wu)
+
+anosim_time_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$Time)
+anosim_t1_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$Time=="T1")
+anosim_t2_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$Time=="T2")
+anosim_t3_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$Time=="T3")
+anosim_t4_fam_wu <- anosim(dist_matrix_fam_wu, metadata5$Time=="T4")
+print(anosim_time_fam_wu)
+print(anosim_t1_fam_wu)
+print(anosim_t2_fam_wu)
+print(anosim_t3_fam_wu)
+print(anosim_t4_fam_wu)
+
+```
+
+#### By genus
+
+```{r}
+# Realizar el análisis Anosim
+anosim_cond_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$cond)
+anosim_c_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$cond=="C")
+anosim_t_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$cond=="T")
+print(anosim_cond_gen_bc)
+print(anosim_c_gen_bc)
+print(anosim_t_gen_bc)
+
+anosim_condtime_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$Cond.T)
+print(anosim_condtime_gen_bc)
+
+anosim_time_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$Time)
+anosim_t1_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$Time=="T1")
+anosim_t2_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$Time=="T2")
+anosim_t3_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$Time=="T3")
+anosim_t4_gen_bc <- anosim(dist_matrix_gen_bc, metadata5$Time=="T4")
+print(anosim_time_gen_bc)
+print(anosim_t1_gen_bc)
+print(anosim_t2_gen_bc)
+print(anosim_t3_gen_bc)
+print(anosim_t4_gen_bc)
+
+
+
+```
+
+
+```{r}
+# wu
+anosim_cond_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$cond)
+anosim_c_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$cond=="C")
+anosim_t_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$cond=="T")
+print(anosim_cond_gen_wu)
+print(anosim_c_gen_wu)
+print(anosim_t_gen_wu)
+
+anosim_condtime_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$Cond.T)
+print(anosim_condtime_gen_wu)
+
+anosim_time_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$Time)
+anosim_t1_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$Time=="T1")
+anosim_t2_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$Time=="T2")
+anosim_t3_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$Time=="T3")
+anosim_t4_gen_wu <- anosim(dist_matrix_gen_wu, metadata5$Time=="T4")
+print(anosim_time_gen_wu)
+print(anosim_t1_gen_wu)
+print(anosim_t2_gen_wu)
+print(anosim_t3_gen_wu)
+print(anosim_t4_gen_wu)
+
+```
+
+
+
+## Ajuste de los vectores y factores ambientales a una ordenación
+
+Se utilizó la función *envfit* del paquete _vegan_ para ajustar los vectores y factores ambientales del experimento a la ordenación obtenida en los análisis de la diversidad beta (17).
+
+### Nuevo metadato
+
+```{r nuevo metadato6}
+metadata6 <- read.table("metadata6.txt", header = TRUE, sep = "\t")
+metadata6[is.na(metadata6)] <- 0
+head(metadata6)
+```
+
+### By phylum
+
+```{r}
+fit_phy <- envfit(ps_phylum_w, metadata6, perm = 999, na.rm = TRUE)
+fit_phy
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(vegan::scores(ps_phylum_bray)$sites)
+
+#add 'season' column as before
+data.scores$condition = metadata6$cond
+```
+
+```{r}
+en_coord_cont = as.data.frame(vegan::scores(fit_phy, "vectors")) * ordiArrowMul(fit_phy)
+en_coord_cat = as.data.frame(vegan::scores(fit_phy, "factors")) * ordiArrowMul(fit_phy)
+```
+
+
+```{r}
+gg1 = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2)) +
+  geom_point(data = data.scores, aes(colour = condition), size = 3, alpha = 0.5) +
+  scale_colour_manual(values = c("green", "red"))  +
+  geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), data = en_coord_cont, size =1, alpha = 0.5, colour = "grey30") +
+  geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", fontface = "bold", label = row.names(en_coord_cont)) +
+  theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"),  panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"),        axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), legend.title = element_text(size = 10, face = "bold", colour = "grey30"), legend.text = element_text(size = 9, colour = "grey30")) +
+  labs(colour = "condition")
+     
+gg1
+```
+
+
+### By class
+
+```{r}
+fit_class <- envfit(ps_class_w, metadata6, perm = 999, na.rm = TRUE)
+fit_class
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(vegan::scores(ps_class_bray)$sites)
+
+#add 'season' column as before
+data.scores$condition = metadata6$cond
+```
+
+```{r}
+en_coord_cont = as.data.frame(vegan::scores(fit_class, "vectors")) * ordiArrowMul(fit_class)
+en_coord_cat = as.data.frame(vegan::scores(fit_class, "factors")) * ordiArrowMul(fit_class)
+```
+
+```{r}
+gg2 = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2)) +
+  geom_point(data = data.scores, aes(colour = condition), size = 3, alpha = 0.5) +
+  scale_colour_manual(values = c("green", "red"))  +
+  geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), data = en_coord_cont, size =1, alpha = 0.5, colour = "grey30") +
+  geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", fontface = "bold", label = row.names(en_coord_cont)) +
+  theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"),  panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"),        axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), legend.title = element_text(size = 10, face = "bold", colour = "grey30"), legend.text = element_text(size = 9, colour = "grey30")) +
+  labs(colour = "condition")
+     
+gg2
+```
+
+### By order
+
+```{r}
+fit_order <- envfit(ps_order_w, metadata6, perm = 999, na.rm = TRUE)
+fit_order
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(vegan::scores(ps_order_bray)$sites)
+
+#add 'season' column as before
+data.scores$condition = metadata6$cond
+```
+
+```{r}
+en_coord_cont = as.data.frame(vegan::scores(fit_order, "vectors")) * ordiArrowMul(fit_order)
+en_coord_cat = as.data.frame(vegan::scores(fit_order, "factors")) * ordiArrowMul(fit_order)
+```
+
+```{r}
+gg3 = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2)) +
+  geom_point(data = data.scores, aes(colour = condition), size = 3, alpha = 0.5) +
+  scale_colour_manual(values = c("green", "red"))  +
+  geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), data = en_coord_cont, size =1, alpha = 0.5, colour = "grey30") +
+  geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", fontface = "bold", label = row.names(en_coord_cont)) +
+  theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"),  panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"),        axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), legend.title = element_text(size = 10, face = "bold", colour = "grey30"), legend.text = element_text(size = 9, colour = "grey30")) +
+  labs(colour = "condition")
+     
+gg3
+```
+
+
+### By family
+
+```{r}
+fit_fam <- envfit(ps_fam_w, metadata6, perm = 999, na.rm = TRUE)
+fit_fam
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(vegan::scores(ps_fam_bray)$sites)
+
+#add 'season' column as before
+data.scores$condition = metadata6$cond
+```
+
+```{r}
+en_coord_cont = as.data.frame(vegan::scores(fit_fam, "vectors")) * ordiArrowMul(fit_fam)
+en_coord_cat = as.data.frame(vegan::scores(fit_fam, "factors")) * ordiArrowMul(fit_fam)
+```
+
+```{r}
+gg4 = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2)) +
+  geom_point(data = data.scores, aes(colour = condition), size = 3, alpha = 0.5) +
+  scale_colour_manual(values = c("green", "red"))  +
+  geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), data = en_coord_cont, size =1, alpha = 0.5, colour = "grey30") +
+  geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", fontface = "bold", label = row.names(en_coord_cont)) +
+  theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"),  panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"),        axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), legend.title = element_text(size = 10, face = "bold", colour = "grey30"), legend.text = element_text(size = 9, colour = "grey30")) +
+  labs(colour = "condition")
+     
+gg4
+```
+
+### By genus
+
+```{r}
+fit_gen <- envfit(ps_genus_w, metadata6, perm = 999, na.rm = TRUE)
+fit_gen
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(vegan::scores(ps_gen_bray)$sites)
+
+#add 'season' column as before
+data.scores$condition = metadata6$cond
+```
+
+```{r}
+en_coord_cont = as.data.frame(vegan::scores(fit_gen, "vectors")) * ordiArrowMul(fit_gen)
+en_coord_cat = as.data.frame(vegan::scores(fit_gen, "factors")) * ordiArrowMul(fit_gen)
+```
+
+```{r}
+gg5 = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2)) +
+  geom_point(data = data.scores, aes(colour = condition), size = 3, alpha = 0.5) +
+  scale_colour_manual(values = c("green", "red"))  +
+  geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), data = en_coord_cont, size =1, alpha = 0.5, colour = "grey30") +
+  geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", fontface = "bold", label = row.names(en_coord_cont)) +
+  theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"),  panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"),        axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), legend.title = element_text(size = 10, face = "bold", colour = "grey30"), legend.text = element_text(size = 9, colour = "grey30")) +
+  labs(colour = "condition")
+     
+gg5
+```
+
+### By species
+
+```{r}
+fit_spec <- envfit(ps_spec_w, metadata6, perm = 999, na.rm = TRUE)
+fit_spec
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(vegan::scores(ps_spe_bray)$sites)
+
+#add 'season' column as before
+data.scores$condition = metadata6$cond
+```
+
+```{r}
+en_coord_cont = as.data.frame(vegan::scores(fit_spec, "vectors")) * ordiArrowMul(fit_spec)
+en_coord_cat = as.data.frame(vegan::scores(fit_spec, "factors")) * ordiArrowMul(fit_spec)
+```
+
+```{r}
+gg6 = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2)) +
+  geom_point(data = data.scores, aes(colour = condition), size = 3, alpha = 0.5) +
+  scale_colour_manual(values = c("green", "red"))  +
+  geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), data = en_coord_cont, size =1, alpha = 0.5, colour = "grey30") +
+  geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", fontface = "bold", label = row.names(en_coord_cont)) +
+  theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"),  panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"),        axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), legend.title = element_text(size = 10, face = "bold", colour = "grey30"), legend.text = element_text(size = 9, colour = "grey30")) +
+  labs(colour = "condition")
+     
+gg6
+```
+
+## Análisis de especies indicadoras Dufrene-Legendre
+
+En primer lugar, renombro un objeto phyloseq para extraer las lecturas, el metadato asociado y los taxones para convertirlo en un SummarizedExperiment para poder escribirlo en un archivo excel, y posteriormente editar ese archivo para crear la tabla con la que se realizarán los análsis.
+
+```{r}
+ps_for_se <- phyloseq(otu_table(ps_rare), sample_data(ps_rare), tax_table(ps_rare))
+```
+
+```{r}
+# Extract the OTU counts matrix from the phyloseq object
+counts <- otu_table(ps_rare, taxa_are_rows = TRUE)
+
+# Extract the sample metadata from the phyloseq object
+colData <- sample_data(ps_rare)
+
+# Extract the taxonomic information from the phyloseq object
+taxa <- tax_table(ps_rare)
+
+# Create a SummarizedExperiment object
+se <- SummarizedExperiment(assays = list(counts = counts),
+                           colData = colData,
+                           rowData = taxa)
+
+# Check the class of the converted object
+class(se)
+```
+
+```{r}
+# Guardar los datos en un archivo CSV
+write.csv(counts, file = "counts.csv", row.names = TRUE)
+```
+```{r}
+data <- read_excel("counts_2.xlsx", col_names = TRUE, col_types= "guess")
+data_tras <- t(data)
+colnames(data_tras) <- data_tras[1,]
+data_tras <- data_tras[-1,]
+rm(data)
+```
+
+A continuación se calcula el valor del indicador ( valor de fidelidad y abundancia relativa) de especies en conglomerados o tipos.
+
+### By PO3
+
+```{r by_PO3}
+clust <- cut(metadata5$PO3, 5, labels=FALSE)
+summary(indval(data_tras, clust, numitr = 1000))
+by_PO3 <- indval(data_tras, clust, numitr = 1000)
+```
+
+
+```{r by_PO3-}
+# Guardar cada componente en un archivo de texto
+write.table(by_PO3$maxcls, file = "maxclsby_PO3.txt")
+write.table(by_PO3$indcls, file = "indclsby_PO3.txt")
+write.table(by_PO3$pval, file = "pvalby_PO3.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_PO3$relfrq, "relfrqby_PO3.xlsx")
+write.xlsx(by_PO3$relabu, "relabuby_PO3.xlsx")
+write.xlsx(by_PO3$indval, "indvalby_PO3.xlsx")
+```
+
+### By Cyt p25
+
+```{r by_cytp25}
+clust <- cut(metadata5$Cyt.P25, 5, labels=FALSE)
+summary(indval(data_tras, clust, numitr = 1000))
+by_cytp25 <- indval(data_tras, clust, numitr = 1000)
+```
+
+
+```{r by_cytp25-}
+# Guardar cada componente en un archivo de texto
+write.table(by_cytp25$maxcls, file = "maxclsby_cytp25.txt")
+write.table(by_cytp25$indcls, file = "indclsby_cytp25.txt")
+write.table(by_cytp25$pval, file = "pvalby_cytp25.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_cytp25$relfrq, "relfrqby_cytp25.xlsx")
+write.xlsx(by_cytp25$relabu, "relabuby_cytp25.xlsx")
+write.xlsx(by_cytp25$indval, "indvalby_cytp25.xlsx")
+```
+
+### By Cyt p24
+
+```{r by_cytp24}
+clust <- cut(metadata5$Cyt.P24, 5, labels=FALSE)
+summary(indval(data_tras, clust, numitr = 1000))
+by_cytp24 <- indval(data_tras, clust, numitr = 1000)
+```
+
+```{r by_cytp24-}
+# Guardar cada componente en un archivo de texto
+write.table(by_cytp24$maxcls, file = "maxclsby_cytp24.txt")
+write.table(by_cytp24$indcls, file = "indclsby_cytp24.txt")
+write.table(by_cytp24$pval, file = "pvalby_cytp24.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_cytp24$relfrq, "relfrqby_cytp24.xlsx")
+write.xlsx(by_cytp24$relabu, "relabuby_cytp24.xlsx")
+write.xlsx(by_cytp24$indval, "indvalby_cytp24.xlsx")
+```
+
+### By NH4
+
+```{r by_NH4}
+clust <- cut(metadata5$NH4, 5, labels=FALSE)
+summary(indval(data_tras, clust, numitr = 1000))
+by_NH4 <- indval(data_tras, clust, numitr = 1000)
+```
+
+
+```{r by_NH4-}
+# Guardar cada componente en un archivo de texto
+write.table(by_NH4$maxcls, file = "maxclsby_NH4.txt")
+write.table(by_NH4$indcls, file = "indclsby_NH4.txt")
+write.table(by_NH4$pval, file = "pvalby_NH4.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_NH4$relfrq, "relfrqby_NH4.xlsx")
+write.xlsx(by_NH4$relabu, "relabuby_NH4.xlsx")
+write.xlsx(by_NH4$indval, "indvalby_NH4.xlsx")
+```
+
+### By NO3
+
+```{r by_NO3}
+clust <- cut(metadata5$NO3, 5, labels=FALSE)
+summary(indval(data_tras, clust, numitr = 1000))
+by_NO3 <- indval(data_tras, clust, numitr = 1000)
+```
+
+
+```{r by_NO3-}
+# Guardar cada componente en un archivo de texto
+write.table(by_NO3$maxcls, file = "maxclsby_NO3.txt")
+write.table(by_NO3$indcls, file = "indclsby_NO3.txt")
+write.table(by_NO3$pval, file = "pvalby_NO3.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_NO3$relfrq, "relfrqby_NO3.xlsx")
+write.xlsx(by_NO3$relabu, "relabuby_NO3.xlsx")
+write.xlsx(by_NO3$indval, "indvalby_NO3.xlsx")
+```
+
+
+### By Si
+
+```{r by_Si}
+clust <- cut(metadata5$Si, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_Si <- indval(data_tras, clust)
+```
+
+
+```{r by_Si-}
+# Guardar cada componente en un archivo de texto
+write.table(by_Si$maxcls, file = "maxclsby_Si.txt")
+write.table(by_Si$indcls, file = "indclsby_Si.txt")
+write.table(by_Si$pval, file = "pvalby_Si.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_Si$relfrq, "relfrqby_Si.xlsx")
+write.xlsx(by_Si$relabu, "relabuby_Si.xlsx")
+write.xlsx(by_Si$indval, "indvalby_Si.xlsx")
+```
+
+
+### By TOC
+
+```{r by_TOC}
+clust <- cut(metadata5$TOC, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_TOC <- indval(data_tras, clust)
+```
+
+
+```{r by_TOC-}
+# Guardar cada componente en un archivo de texto
+write.table(by_TOC$maxcls, file = "maxclsby_TOC.txt")
+write.table(by_TOC$indcls, file = "indclsby_TOC.txt")
+write.table(by_TOC$pval, file = "pvalby_TOC.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_TOC$relfrq, "relfrqby_TOC.xlsx")
+write.xlsx(by_TOC$relabu, "relabuby_TOC.xlsx")
+write.xlsx(by_TOC$indval, "indvalby_TOC.xlsx")
+```
+
+
+### By Chlo
+
+```{r by_Chlo}
+clust <- cut(metadata5$Chlo, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_Chlo <- indval(data_tras, clust)
+```
+
+
+```{r by_Chlo-}
+# Guardar cada componente en un archivo de texto
+write.table(by_Chlo$maxcls, file = "maxclsby_Chlo.txt")
+write.table(by_Chlo$indcls, file = "indclsby_Chlo.txt")
+write.table(by_Chlo$pval, file = "pvalby_Chlo.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_Chlo$relfrq, "relfrqby_Chlo.xlsx")
+write.xlsx(by_Chlo$relabu, "relabuby_Chlo.xlsx")
+write.xlsx(by_Chlo$indval, "indvalby_Chlo.xlsx")
+```
+
+### By Pheo
+
+```{r by_Pheo}
+clust <- cut(metadata5$Pheo, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_Pheo <- indval(data_tras, clust)
+```
+
+
+```{r by_Pheo-}
+# Guardar cada componente en un archivo de texto
+write.table(by_Pheo$maxcls, file = "maxclsby_Pheo.txt")
+write.table(by_Pheo$indcls, file = "indclsby_Pheo.txt")
+write.table(by_Pheo$pval, file = "pvalby_Pheo.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_Pheo$relfrq, "relfrqby_Pheo.xlsx")
+write.xlsx(by_Pheo$relabu, "relabuby_Pheo.xlsx")
+write.xlsx(by_Pheo$indval, "indvalby_Pheo.xlsx")
+```
+
+
+### By pH
+
+```{r by_pH}
+clust <- cut(metadata5$pH, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_pH <- indval(data_tras, clust)
+```
+
+
+```{r by_pH-}
+# Guardar cada componente en un archivo de texto
+write.table(by_pH$maxcls, file = "maxclsby_pH.txt")
+write.table(by_pH$indcls, file = "indclsby_pH.txt")
+write.table(by_pH$pval, file = "pvalby_pH.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_pH$relfrq, "relfrqby_pH.xlsx")
+write.xlsx(by_pH$relabu, "relabuby_pH.xlsx")
+write.xlsx(by_pH$indval, "indvalby_pH.xlsx")
+```
+
+### By PSU
+
+```{r by_PSU}
+clust <- cut(metadata5$PSU, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_PSU <- indval(data_tras, clust)
+```
+
+
+```{r by_PSU-}
+# Guardar cada componente en un archivo de texto
+write.table(by_PSU$maxcls, file = "maxclsby_PSU.txt")
+write.table(by_PSU$indcls, file = "indclsby_PSU.txt")
+write.table(by_PSU$pval, file = "pvalby_PSU.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_PSU$relfrq, "relfrqby_PSU.xlsx")
+write.xlsx(by_PSU$relabu, "relabuby_PSU.xlsx")
+write.xlsx(by_PSU$indval, "indvalby_PSU.xlsx")
+```
+
+### By ODppm
+
+```{r by_OD}
+clust <- cut(metadata5$ODppm, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_OD <- indval(data_tras, clust)
+```
+
+
+```{r by_OD-}
+# Guardar cada componente en un archivo de texto
+write.table(by_OD$maxcls, file = "maxclsby_OD.txt")
+write.table(by_OD$indcls, file = "indclsby_OD.txt")
+write.table(by_OD$pval, file = "pvalby_OD.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_OD$relfrq, "relfrqby_OD.xlsx")
+write.xlsx(by_OD$relabu, "relabuby_OD.xlsx")
+write.xlsx(by_OD$indval, "indvalby_OD.xlsx")
+```
+
+### By TDSppm
+
+```{r by_TDS}
+clust <- cut(metadata5$TDSppm, 5, labels=FALSE)
+summary(indval(data_tras, clust))
+by_TDS <- indval(data_tras, clust)
+```
+
+
+```{r by_TDS-}
+# Guardar cada componente en un archivo de texto
+write.table(by_TDS$maxcls, file = "maxclsby_TDS.txt")
+write.table(by_TDS$indcls, file = "indclsby_TDS.txt")
+write.table(by_TDS$pval, file = "pvalby_TDS.txt")
+
+# Guardar cada componente en un archivo Excel
+write.xlsx(by_TDS$relfrq, "relfrqby_TDS.xlsx")
+write.xlsx(by_TDS$relabu, "relabuby_TDS.xlsx")
+write.xlsx(by_TDS$indval, "indvalby_TDS.xlsx")
+```
+## Referencias
+
+1. <https://github.com/jbisanz/qiime2R/>.
+
+2. McMurdie PJ, Holmes S. phyloseq: an R package for reproducible interactive
+analysis and graphics of microbiome census data. PLoS One. 2013 Apr
+22;8(4):e61217. doi: 10.1371/journal.pone.0061217. PMID: 23630581; PMCID:
+PMC3632530.
+
+3. Shannon, C.E. and Weaver, W. (1949). “The mathematical theory of 
+communication”. University of Illonois Press, Champaign, Illonois.
+
+4. Chao, A. and Lee, S.M.. (1992). “Estimating the number of classes via 
+sample coverage”. Journal of the American Statistical Association. (87): 
+210-217.
+
+5. Colwell, R.K., Mao, C.X., Chang, J. (2004). “Interpolating, extrapolating, 
+and comparing incidence-based species accumulation curves.” Ecology. (85), 
+2717-2727.
+
+6. Simpson, E.H. (1949). “Measurement of Diversity”. Nature. (163): 688
+7.Fisher, R.A., Corbet, A.S. and Williams, C.B. (1943). “The relation between 
+the number of species and the number of individuals in a random sample of an 
+animal population”. Journal of Animal Ecology. (12): 42-58.
+
+7. Bálint M, Bahram M, Eren AM, Faust K, Fuhrman JA, Lindahl B, O'Hara RB, 
+Öpik M, Sogin ML, Unterseher M, Tedersoo L. Millions of reads, thousands of 
+taxa: microbial community structure and associations analyzed via marker 
+genes. FEMS Microbiol Rev. 2016 Sep;40(5):686-700. doi: 10.1093/femsre/fuw017. Epub 2016 Jun 29. PMID: 27358393.
+
+8. Anja Struyf, Mia Hubert and Peter J. Rousseeuw (1996) Clustering in an 
+Object-Oriented Environment. Journal of Statistical Software 1. doi: 
+10.18637/jss.v001.i04.
+
+9. <https://www.stat.berkeley.edu/~s133/Cluster2a.html>.
+
+10. <http://joey711.github.io/phyloseq/plot_ordination-examples>.
+
+11. Anderson, M.J. 2017. Permutational Multivariate Analysis of Variance 
+(PERMANOVA). Wiley StatsRef: Statistics Reference Online. DOI: 
+10.1002/9781118445112.stat07841.
+
+12. Vicente-Gonzalez, L., and J.L. Vicente-Villardon. 2021. PERMANOVA: 
+Multivariate analysis of variance based on distances and permutations. R 
+Package, v.0.2.0. https://cran.r-project.org/package=PERMANOVA.
+
+13. <https://github.com/vegandevs/vegan>.
+
+14. Somerfield, P.J., K.R. Clarke, and R.N. Gorley. 2021a. A generalized 
+analysis of similarities (ANOSIM) statistic for designs with ordered factors. 
+Austral Ecology 46:901-910.
+
+15. Somerfield, P.J., K.R. Clarke, and R.N. Gorley. 2021b. Analysis of
+similarities (ANOSIM) for 2-way layouts using a generalized ANOSIM statistic, 
+with comparative notes on Permutational Multivariate Analysis of Variance 
+(PERMANOVA). Austral Ecology 46:911-926.
+
+16. Somerfield, P.J., K.R. Clarke, and R.N. Gorley. 2021c. Analysis of 
+similarities (ANOSIM) for 3-way designs. Austral Ecology 46:927-941.
+
+17. Jari Oksanen. The permutation test derives from the code suggested by Michael Scroggie.
+
+18. David W. Roberts droberts@montana.edu. Dufrene, M. and Legendre, P. 1997. Species assemblages and indicator species: the need for a flexible asymmetrical approach. Ecol. Monogr. 67(3):345-366.
